@@ -1,0 +1,203 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>3D 구강 모형 · 임플란트</title>
+<style>
+html,body{margin:0;height:100%;background:#0b0b0d;color:#eee;font-family:-apple-system,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;overflow:hidden}
+canvas{display:block;touch-action:none}
+header{position:fixed;top:18px;left:22px;pointer-events:none}
+header h1{margin:0;font-weight:300;letter-spacing:.12em;font-size:15px;color:#d8c9a8}
+header p{margin:6px 0 0;font-size:12px;color:#888}
+#ui{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);display:flex;flex-wrap:wrap;gap:8px;justify-content:center;width:min(94vw,640px)}
+button{background:rgba(255,255,255,.06);color:#ddd;border:1px solid rgba(255,255,255,.18);padding:10px 15px;border-radius:999px;font-size:13px;backdrop-filter:blur(8px);cursor:pointer}
+button.on{background:#d8c9a8;color:#111;border-color:#d8c9a8}
+#cap{position:fixed;top:18px;right:22px;max-width:260px;text-align:right;font-size:12px;color:#aaa;line-height:1.6}
+.sub{display:none}.sub.show{display:inline-block}
+</style></head><body>
+<header><h1>DENTAL 3D</h1><p>드래그로 회전 · 핀치/휠로 확대</p></header>
+<div id="cap"></div>
+<div id="ui">
+<button data-v="oral">구강 모형</button><button data-v="fixture">임플란트 픽스처</button><button data-v="placed">식립 모습</button>
+<button id="jaw" class="sub">입 벌리기</button><button id="exp" class="sub">분해도</button><button id="rot">자동 회전</button>
+</div>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
+import {mergeVertices} from 'three/addons/utils/BufferGeometryUtils.js';
+
+const R=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});
+R.setPixelRatio(Math.min(devicePixelRatio,2));R.setSize(innerWidth,innerHeight);
+R.toneMapping=THREE.ACESFilmicToneMapping;R.toneMappingExposure=1.0;R.shadowMap.enabled=true;R.shadowMap.type=THREE.PCFSoftShadowMap;
+R.localClippingEnabled=true;document.body.appendChild(R.domElement);
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x0b0b0d);
+const pm=new THREE.PMREMGenerator(R);scene.environment=pm.fromScene(new RoomEnvironment(),0.04).texture;
+const cam=new THREE.PerspectiveCamera(35,innerWidth/innerHeight,0.1,200);
+const ctl=new OrbitControls(cam,R.domElement);ctl.enableDamping=true;ctl.autoRotateSpeed=1.2;
+const key=new THREE.DirectionalLight(0xfff3e6,2.2);key.position.set(6,10,8);key.castShadow=true;key.shadow.mapSize.set(2048,2048);
+Object.assign(key.shadow.camera,{left:-10,right:10,top:10,bottom:-10});key.shadow.radius=6;key.shadow.bias=-0.0005;scene.add(key);
+const rim=new THREE.DirectionalLight(0x9fb8ff,1.2);rim.position.set(-8,4,-8);scene.add(rim);
+scene.add(new THREE.HemisphereLight(0xffffff,0x221a18,0.35));
+const floor=new THREE.Mesh(new THREE.CircleGeometry(30,64),new THREE.ShadowMaterial({opacity:.35}));floor.rotation.x=-Math.PI/2;floor.position.y=-4.2;floor.receiveShadow=true;scene.add(floor);
+
+// materials
+const enamel=new THREE.MeshPhysicalMaterial({color:0xf3ecdc,roughness:.22,clearcoat:.8,clearcoatRoughness:.15,sheen:.3,sheenColor:0xfff8ee,transmission:.08,thickness:.6,ior:1.6});
+const rootM=new THREE.MeshPhysicalMaterial({color:0xe6d3a8,roughness:.55});
+const gumM=new THREE.MeshPhysicalMaterial({color:0xd9737a,roughness:.42,clearcoat:.6,clearcoatRoughness:.3,sheen:.6,sheenColor:0xffb0b0,transmission:.05,thickness:1});
+const tiM=new THREE.MeshPhysicalMaterial({color:0xd4d7dc,metalness:1,roughness:.24,clearcoat:.2,envMapIntensity:1.8});
+const tiGold=new THREE.MeshPhysicalMaterial({color:0xd9bb8a,metalness:1,roughness:.22,envMapIntensity:1.6});
+const zirc=new THREE.MeshPhysicalMaterial({color:0xf5efe2,roughness:.18,clearcoat:1,clearcoatRoughness:.1,transmission:.06,thickness:.5});
+const boneOut=new THREE.MeshPhysicalMaterial({color:0xeee2c8,roughness:.6,side:THREE.DoubleSide});
+const boneIn=new THREE.MeshStandardMaterial({color:0xcfae86,roughness:.9});
+
+// noise for micro-texture
+function hash(x,y,z){const s=Math.sin(x*127.1+y*311.7+z*74.7)*43758.5453;return s-Math.floor(s);}
+// crown: type i(incisor) c(canine) p(premolar) m(molar); w mesiodistal, d buccolingual, h height
+function crown(type,w,d,h){
+  const g=new THREE.SphereGeometry(1,64,48);const p=g.attributes.position;const v=new THREE.Vector3();
+  const cusps={i:[],c:[[0,0,.55]],p:[[0,.42,.42],[0,-.38,.32]],m:[[.45,.42,.38],[-.42,.42,.36],[.45,-.4,.33],[-.4,-.4,.3],[0,.5,.15]]}[type];
+  for(let k=0;k<p.count;k++){v.fromBufferAttribute(p,k);let {x,y,z}=v;
+    // squarer silhouette
+    const sq=1+.18*(1-Math.abs(y));x*= (type=='i'?1.05:sq); z*=(type=='m'?sq:1);
+    if(type=='i'){const t=(y+1)/2;z*=1-.62*t*t;x*=1+.18*t;}
+    if(y>0){
+      if(type=='i'){y=Math.min(y,.8);}
+      else if(type=='c'){z*=1-.45*y*y; x*=1-.35*y*y; }
+      else{ y=Math.min(y,.55)*.9; }
+      for(const c of cusps){const dx=x-c[0],dz=z-c[1];y+=c[2]*Math.exp(-(dx*dx+dz*dz)/(type=='c'?.18:.09));}
+      if(type=='m'||type=='p'){y-=.12*Math.exp(-(x*x)/.02)*(1-Math.abs(z));} // central groove
+    } else { y*=1.05; x*=1-.25*y*y; z*=1-.2*y*y; } // cervical constriction
+    y+=(hash(x,y,z)-.5)*.006;
+    p.setXYZ(k,x*w/2,y*h/2,z*d/2);}
+  g.computeVertexNormals();return g;}
+function root(w,d,len,n){const grp=new THREE.Group();
+  const offs=n==1?[[0,0]]:n==2?[[.25,0],[-.25,0]]:[[.25,.2],[-.25,.2],[0,-.25]];
+  for(const o of offs){len*=.85;const r=Math.min(w,d)/(n==1?2.4:3.6);const geo=new THREE.CylinderGeometry(r,r*.2,len,24,8);geo.translate(0,-len/2,0);
+    const m=new THREE.Mesh(geo,rootM);m.position.set(o[0]*w,0,o[1]*d);m.rotation.z=o[0]*.25;grp.add(m);}return grp;}
+// tooth table: type,w,d,h,rootLen,roots
+const TT=[['i',.86,.7,1.25,1.3,1],['i',.66,.62,1.1,1.25,1],['c',.76,.8,1.05,1.75,1],['p',.7,.9,.85,1.4,1],['p',.68,.9,.8,1.4,1],['m',1.02,1.1,.75,1.3,3],['m',.94,1.06,.7,1.2,3]];
+const TL=[['i',.54,.6,1.0,1.15,1],['i',.6,.62,1.0,1.2,1],['c',.7,.76,1.0,1.55,1],['p',.7,.8,.82,1.4,1],['p',.72,.84,.8,1.45,1],['m',1.12,1.02,.72,1.3,2],['m',1.04,.98,.7,1.25,2]];
+function archCurve(sx,sz){const pts=[];for(let t=-1;t<=1.0001;t+=.05){const a=t*Math.PI*.5;pts.push(new THREE.Vector3(Math.sin(a)*3.05*sx,0,(Math.cos(a)*3.7-1.4)*sz));}return new THREE.CatmullRomCurve3(pts);}
+function buildArch(table,sx,sz,skip){const grp=new THREE.Group();const total=table.reduce((a,t)=>a+t[1]+.03,0);const k0=total/(.47*archCurve(sx,sz).getLength());const curve=archCurve(sx*k0,sz*k0);const L=curve.getLength();const half=.5;const centers=[];
+  for(const side of[1,-1]){let s=0;table.forEach((t,i)=>{const mid=s+t[1]/2;s+=t[1]+.03;const u=half+side*mid/L;
+      const pos=curve.getPointAt(u),tan=curve.getTangentAt(u);centers.push(u);
+      if(skip&&skip(i,side)){grp.userData.gap={pos,tan};return;}
+      const tooth=new THREE.Group();const c=new THREE.Mesh(crown(t[0],t[1],t[2],t[3]),enamel);c.position.y=t[3]/2-.05;c.castShadow=true;
+      tooth.add(c);if(skip)tooth.add(root(t[1]*.8,t[2]*.8,t[4],t[5]));
+      tooth.position.copy(pos);tooth.rotation.y=Math.atan2(tan.x,tan.z)-Math.PI/2;
+      // incisors flare labially
+      tooth.rotateX(0);if(i<3)tooth.rotateZ(0);tooth.rotation.order='YXZ';tooth.rotation.x=0;
+      const q=new THREE.Quaternion().setFromAxisAngle(tan.clone().normalize(),(i<3?-.18:-.05)*side*0);tooth.quaternion.premultiply(q);
+      // labial tilt for anteriors: tilt crown outward
+      const out=new THREE.Vector3(-tan.z,0,tan.x).normalize();const ax=new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0),out).normalize();
+      tooth.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(ax,i<3?.12:.03));
+      grp.add(tooth);});}
+  grp.add(gum(curve,centers));return grp;}
+function gum(curve,centers){const NU=360,NV=40;const pos=[],idx=[];
+  centers=[...centers].sort((a,b)=>a-b);
+  for(let a=0;a<=NU;a++){const u=.02+.96*a/NU;const P=curve.getPointAt(u),T=curve.getTangentAt(u);const N=new THREE.Vector3(-T.z,0,T.x).normalize();
+    let dmin=1;for(const c of centers)dmin=Math.min(dmin,Math.abs(c-u));const pap=Math.exp(-dmin*dmin/0.00018); // papilla near contacts? invert
+    const scal=.18*(1-pap*0)+0; const crest=-.08+.22*(1-Math.exp(-Math.pow(dmin*30,2)))*1.0;
+    const endTaper=Math.min(1,Math.min(u,1-u)*12);
+    for(let b=0;b<=NV;b++){const th=Math.PI*b/NV;const r=.7*endTaper+.08;const off=Math.cos(th)*r;let y=Math.sin(th)*2.0-2.15;
+      y=y+(crest+.15)*Math.pow(Math.sin(th),10);
+      const n=(hash(a*.3,b*.3,1)-.5)*.008;
+      pos.push(P.x+N.x*(off+n),y,P.z+N.z*(off+n));}}
+  for(let a=0;a<NU;a++)for(let b=0;b<NV;b++){const i=a*(NV+1)+b;idx.push(i,i+1,i+NV+1,i+1,i+NV+2,i+NV+1);}
+  const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));g.setIndex(idx);g.computeVertexNormals();
+  const m=new THREE.Mesh(g,gumM);m.castShadow=m.receiveShadow=true;return m;}
+
+// ---- ORAL MODEL
+const oral=new THREE.Group();scene.add(oral);
+const lower=buildArch(TL,.92,.92);lower.position.y=-1.1;oral.add(lower);
+const hinge=new THREE.Group();hinge.position.set(0,-.2,-3.2);oral.add(hinge);
+const upper=buildArch(TT,1,1);upper.scale.y=-1;upper.position.set(0,.7,3.32);hinge.add(upper);
+// palate
+{const g=new THREE.SphereGeometry(1,48,24,0,Math.PI*2,0,Math.PI/2);const m=new THREE.Mesh(g,gumM);m.scale.set(2.2,.9,2.6);m.position.set(0,1.0,.3+.15+3.2);m.position.y=-.2+1.0-(-.2)+.0;upper.add(m);m.scale.y=-.9; m.position.set(0,-1.0,0.05);m.scale.set(2.15,1.25,2.55);}
+
+// ---- IMPLANT
+function fixture(){const g=new THREE.Group();const H=4.2,r0=.5,r1=.34;
+  const rad=y=>{const t=y/H;return r0-(r0-r1)*t*t- (t>.9?(t-.9)*1.6:0);}; // y from top(0) downward
+  const prof=[];prof.push(new THREE.Vector2(0,0));
+  for(let i=0;i<=40;i++){const y=H*i/40;prof.push(new THREE.Vector2(rad(y)*.87,-y));}prof.push(new THREE.Vector2(0,-H));
+  const core=new THREE.Mesh(new THREE.LatheGeometry(prof,64),tiM);g.add(core);
+  // collar
+  const col=new THREE.Mesh(new THREE.CylinderGeometry(r0,r0*.97,.45,64),tiM);col.position.y=-.22;g.add(col);
+  // helical thread: custom triangular profile swept
+  const turns=13,seg=turns*72,pos=[],idx=[];const pitch=(H-.7)/turns;
+  for(let s=0;s<=seg;s++){const a=s/seg*turns*Math.PI*2;const y=.55+s/seg*(H-.7);const rc=rad(y)*.86;const depth=Math.min(.11,rad(y)*.3)*Math.min(1,(H-.15-y)*2);
+    const c=Math.cos(a),sn=Math.sin(a);
+    const P=[[rc-.01,-y+pitch*.32],[rc+depth,-y+pitch*.04],[rc+depth,-y-pitch*.04],[rc-.01,-y-pitch*.32]];
+    for(const q of P)pos.push(q[0]*c,q[1],q[0]*sn);}
+  for(let s=0;s<seg;s++)for(let k=0;k<3;k++){const i=s*4+k;idx.push(i,i+4,i+1,i+1,i+4,i+5);}
+  const tg=new THREE.BufferGeometry();tg.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));tg.setIndex(idx);tg.computeVertexNormals();
+  const th=new THREE.Mesh(tg,tiM);th.material.side=THREE.DoubleSide;g.add(th);
+  // apical cutting flutes (dark notches)
+  for(let k=0;k<3;k++){const f=new THREE.Mesh(new THREE.BoxGeometry(.06,.9,.5),new THREE.MeshStandardMaterial({color:0x6a6c70,metalness:1,roughness:.4}));f.position.set(Math.cos(k*2.1)*.25,-H+.45,Math.sin(k*2.1)*.25);f.rotation.y=-k*2.1;g.add(f);}
+  // internal hex (dark)
+  const hx=new THREE.Mesh(new THREE.CylinderGeometry(.24,.24,.05,6),new THREE.MeshStandardMaterial({color:0x111,metalness:1,roughness:.5}));hx.position.y=.005;g.add(hx);
+  g.traverse(o=>o.castShadow=true);return g;}
+function abutment(){const g=new THREE.Group();
+  const prof=[[0,0],[.42,0],[.5,.25],[.46,.4],[.36,1.25],[.3,1.35],[0,1.35]].map(p=>new THREE.Vector2(p[0],p[1]));
+  const m=new THREE.Mesh(new THREE.LatheGeometry(prof,64),tiGold);g.add(m);
+  const hex=new THREE.Mesh(new THREE.CylinderGeometry(.23,.23,.35,6),tiGold);hex.position.y=-.17;g.add(hex);
+  const scr=new THREE.Mesh(new THREE.CylinderGeometry(.13,.13,1.2,16),tiM);scr.position.y=-.6;g.add(scr);
+  g.traverse(o=>o.castShadow=true);return g;}
+function implantCrown(){const m=new THREE.Mesh(crown('m',1.12,1.02,.95),zirc);m.scale.set(1,1.25,1);m.castShadow=true;return m;}
+const impl=new THREE.Group();scene.add(impl);
+const fx=fixture(),ab=abutment(),cr=implantCrown();impl.add(fx,ab,cr);
+const setExploded=(e,grp=[fx,ab,cr])=>{grp[1].userData.t=e?1.6:0.02;grp[2].userData.t=e?3.9:1.75;};
+fx.position.y=0;ab.position.y=.02;cr.position.y=1.75;setExploded(false);
+impl.scale.setScalar(.9);impl.position.y=0;
+
+// ---- PLACED
+const placed=new THREE.Group();scene.add(placed);
+const lw=buildArch(TL,.92,.92,(i,s)=>i==5&&s==1);placed.add(lw);
+const gap=lw.userData.gap;
+const site=new THREE.Group();site.position.copy(gap.pos);site.rotation.y=Math.atan2(gap.tan.x,gap.tan.z)-Math.PI/2;placed.add(site);
+const fx2=fixture(),ab2=abutment(),cr2=implantCrown();const sc=.42;
+fx2.scale.setScalar(sc);fx2.position.y=-.55;ab2.scale.setScalar(sc*1.1);ab2.position.y=-.5;cr2.scale.set(1.0,1.15,.95);cr2.position.y=.32;
+site.add(fx2,ab2,cr2);
+// bone section: half block, cut face at the implant axis
+{const sh=new THREE.Shape();sh.moveTo(-.62,-.5);sh.bezierCurveTo(-.72,-1.3,-.68,-2.1,-.1,-2.45);sh.bezierCurveTo(.45,-2.45,.76,-1.5,.62,-.5);sh.quadraticCurveTo(0,-.3,-.62,-.5);
+  const inner=new THREE.Path();inner.moveTo(-.5,-.62);inner.bezierCurveTo(-.58,-1.3,-.55,-2.0,-.1,-2.3);inner.bezierCurveTo(.35,-2.3,.63,-1.5,.5,-.62);inner.quadraticCurveTo(0,-.45,-.5,-.62);
+  const len=1.8;
+  const outer=new THREE.Mesh(new THREE.ExtrudeGeometry(sh,{depth:len,bevelEnabled:false,curveSegments:24}),boneOut);outer.position.x=-len;
+  const spong=new THREE.Mesh(new THREE.ExtrudeGeometry(new THREE.Shape(inner.getPoints(48)),{depth:len+.01,bevelEnabled:false}),boneIn);spong.position.x=-len-.01+.006;
+  for(const m of[outer,spong]){m.rotation.y=Math.PI/2;m.castShadow=m.receiveShadow=true;site.add(m);}
+  const dots=new THREE.InstancedMesh(new THREE.CircleGeometry(.03,10),new THREE.MeshStandardMaterial({color:0x8d5d3f,roughness:1}),260);let k=0,j=0;const M=new THREE.Matrix4(),Q=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0),Math.PI/2),S=new THREE.Vector3();
+  while(k<260&&j<5000){j++;const z=(hash(j,1,2)-.5)*.95,y=-.75-hash(j,3,4)*1.45;if(Math.abs(z)<.27&&y>-1.45)continue;const sc=.5+hash(j,5,6)*1.2;S.set(sc,sc,sc);M.compose(new THREE.Vector3(.008,y,z),Q,S);dots.setMatrixAt(k++,M);}
+  dots.count=k;site.add(dots);}
+// cut the arch at the implant site (removes distal side, exposing section)
+site.updateWorldMatrix(true,false);placed.updateMatrixWorld(true);
+{const t=new THREE.Vector3(1,0,0).transformDirection(site.matrixWorld);const p0=site.getWorldPosition(new THREE.Vector3());
+ const plane=new THREE.Plane(t.clone().negate(),t.dot(p0));
+ lw.traverse(o=>{if(o.isMesh){o.material=o.material.clone();o.material.clippingPlanes=[plane];o.material.clipShadows=true;if(o.material.color.getHex()==gumM.color.getHex())o.material.side=THREE.DoubleSide;}});}
+placed.position.y=0;
+
+// ---- VIEWS
+const cap=document.getElementById('cap');const caps={oral:'상·하악 전체 치열 (중절치~제2대구치 28개). "입 벌리기"로 턱 관절 움직임을 볼 수 있어요.',
+ fixture:'티타늄 임플란트 픽스처 · 지대주(어버트먼트) · 지르코니아 크라운. "분해도"로 구성품을 펼쳐 볼 수 있어요.',
+ placed:'하악 제1대구치 자리에 식립된 임플란트. 잇몸과 턱뼈를 잘라 단면(겉 피질골·안쪽 해면골)을 보여 줘요.'};
+const camPos={oral:[[0,4.5,11],[0,0,0]],fixture:[[5.5,1.5,11.5],[0,.1,0]],placed:[[6,2.2,4.5],[0,-1,0]]};
+let view='oral',jawOpen=false,expl=false;const camT=new THREE.Vector3(),tgtT=new THREE.Vector3();
+function setView(v){view=v;oral.visible=v=='oral';impl.visible=v=='fixture';placed.visible=v=='placed';
+  document.querySelectorAll('[data-v]').forEach(b=>b.classList.toggle('on',b.dataset.v==v));
+  document.getElementById('jaw').classList.toggle('show',v=='oral');document.getElementById('exp').classList.toggle('show',v=='fixture');
+  const [p,t]=camPos[v];let s=innerWidth<innerHeight?1.6:1;camT.set(...p).multiplyScalar(s);tgtT.set(...t);cap.textContent=caps[v];
+  if(v=='placed'){site.updateWorldMatrix(true,false);tgtT.copy(site.localToWorld(new THREE.Vector3(0,-.7,0)));camT.copy(site.localToWorld(new THREE.Vector3(5*s,1.6*s,3.2*s)));}
+  flying=1;}
+let flying=0;
+document.querySelectorAll('[data-v]').forEach(b=>b.onclick=()=>setView(b.dataset.v));
+document.getElementById('jaw').onclick=e=>{jawOpen=!jawOpen;e.target.textContent=jawOpen?'입 다물기':'입 벌리기';};
+document.getElementById('exp').onclick=e=>{expl=!expl;setExploded(expl);e.target.classList.toggle('on',expl);};
+const rb=document.getElementById('rot');rb.onclick=()=>{ctl.autoRotate=!ctl.autoRotate;rb.classList.toggle('on',ctl.autoRotate);};
+ctl.addEventListener('start',()=>flying=0);
+const q=new URLSearchParams(location.hash.slice(1));setView(q.get('v')||'oral');if(q.get('jaw'))jawOpen=true;if(q.get('exp')){expl=true;setExploded(true);}
+cam.position.copy(camT);ctl.target.copy(tgtT);flying=0;
+addEventListener('resize',()=>{cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix();R.setSize(innerWidth,innerHeight);});
+let ang=0;R.setAnimationLoop(()=>{ang+=((jawOpen?.38:0)-ang)*.08;hinge.rotation.x=-ang;
+  for(const o of[ab,cr])o.position.y+=(o.userData.t-o.position.y)*.1;
+  if(flying){cam.position.lerp(camT,.08);ctl.target.lerp(tgtT,.08);if(cam.position.distanceTo(camT)<.01)flying=0;}
+  ctl.update();R.render(scene,cam);});
+window.__ready=true;
+</script></body></html>
